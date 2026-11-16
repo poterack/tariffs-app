@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Tariff Analysis</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 20px;
+    background: #f4f4f4;
+    font-family: system-ui, -apple-system, sans-serif;
+    display: flex; flex-direction: column; align-items: center; gap: 12px;
+    color: #1a1a1a;
+  }
+  h1 { font-size: 1.2rem; font-weight: 700; margin: 0; }
+  .panel { background: white; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.12); padding: 11px 20px; }
+  .controls { display: flex; align-items: center; gap: 14px; font-size: 0.95rem; flex-wrap: wrap; }
+  .country-toggle { display: flex; border: 1.5px solid #d1d5db; border-radius: 7px; overflow: hidden; }
+  .tbtn {
+    padding: 5px 16px; border: none; cursor: pointer; font-size: 0.85rem; font-weight: 600;
+    background: white; color: #6b7280; transition: background 0.15s, color 0.15s;
+  }
+  .tbtn + .tbtn { border-left: 1.5px solid #d1d5db; }
+  .tbtn.active { background: #1e3a5f; color: white; }
+  .controls input[type=range] { width: 260px; accent-color: #059669; cursor: pointer; }
+  #tau-val { font-weight: 700; color: #059669; min-width: 36px; display: inline-block; }
+  .prohib { color: #dc2626; font-weight: 600; font-size: 0.85rem; display: none; }
+  canvas { display: block; }
+  .stats-row { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+  .stat { text-align: center; min-width: 100px; }
+  .stat .s-label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em; color: #888; }
+  .stat .s-val  { font-size: 1.05rem; font-weight: 700; margin-top: 2px; }
+  #s-imports .s-val { color: #e11d48; }
+  #s-gov .s-val     { color: #16a34a; }
+  #s-tot .s-val     { color: #ea580c; }
+  #s-dwl .s-val     { color: #7c3aed; }
+  #s-fdwl .s-val    { color: #6366f1; }
+  #s-tot .s-label   { text-transform: none; }
+  .legend { display: flex; gap: 14px; font-size: 0.78rem; flex-wrap: wrap; justify-content: center; }
+  .li { display: flex; align-items: center; gap: 5px; }
+  .ls { width: 14px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+</style>
+</head>
+<body>
+<h1>Tariff Analysis</h1>
+
+<div class="panel controls">
+  <div class="country-toggle">
+    <button id="btn-small" class="tbtn active" onclick="setCountry(false)">Small Country</button>
+    <button id="btn-large" class="tbtn"        onclick="setCountry(true)">Large Country</button>
+  </div>
+  <span>Tariff τ = <span id="tau-val">0</span></span>
+  <input type="range" id="tau" min="0" max="30" step="0.5" value="0">
+  <span class="prohib" id="prohib">← Prohibitive tariff</span>
+</div>
+
+<canvas id="c" width="1100" height="510"></canvas>
+
+<div class="panel stats-row">
+  <div class="stat" id="s-imports"><div class="s-label">Imports (M)</div>   <div class="s-val" id="v-imports">60</div></div>
+  <div class="stat" id="s-gov">    <div class="s-label">Gov Revenue</div>   <div class="s-val" id="v-gov">0</div></div>
+  <div class="stat" id="s-tot" style="display:none;">
+                                   <div class="s-label">ToT Gain</div>       <div class="s-val" id="v-tot">0</div></div>
+  <div class="stat" id="s-dwl">    <div class="s-label">DWL (domestic)</div><div class="s-val" id="v-dwl">0</div></div>
+  <div class="stat" id="s-fdwl" style="display:none;"><div class="s-label">DWL (foreign)</div><div class="s-val" id="v-fdwl">0</div></div>
+</div>
+
+<div class="panel legend" id="legend" style="display:none;">
+  <div class="li"><div class="ls" style="background:rgba(220,38,38,0.5)"></div>Producer surplus gain</div>
+  <div class="li"><div class="ls" style="background:rgba(22,163,74,0.5)"></div>Gov't revenue</div>
+  <div class="li" id="leg-tot" style="display:none;">
+       <div class="ls" style="background:rgba(234,88,12,0.5)"></div>Terms of trade gain</div>
+  <div class="li"><div class="ls" style="background:rgba(124,58,237,0.5)"></div>Deadweight loss</div>
+  <div class="li" id="leg-fdwl" style="display:none;"><div class="ls" style="background:rgba(99,102,241,0.5)"></div>Foreign DWL</div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════════
+//  Economic model
+//
+//  Domestic supply:  P = 20 + Q  =>  Qs(P) = max(0, P−20)
+//  Domestic demand:  P = 100 − Q =>  Qd(P) = max(0, 100−P)
+//  Autarky: PA=60, QA=40
+//  World price: Pw=30 → Qs=10, Qd=70, M_FREE=60
+//
+//  Import demand (derived): M = Qd−Qs = 120−2P  →  P = 60−M/2
+//    At M=0: P=PA=60 (vertical intercept at autarky price)  ✓
+//
+//  SMALL COUNTRY — perfectly elastic import supply at Pw:
+//    P_d = Pw + τ,  P* = Pw (unchanged),  Mtau = M_FREE − 2τ
+//    Prohibitive tariff: τ* = 30
+//
+//  LARGE COUNTRY — upward-sloping import supply: P* = 10 + M/3
+//    Solving demand=supply with wedge P_d−P*=τ:
+//      M = 1.2(50−τ),  P_d = 30+0.6τ,  P* = 30−0.4τ
+//    Prohibitive tariff: τ* = 50  (P_d→PA, M→0)
+//    Terms-of-trade gain = (Pw−P*) × Mtau = 0.4τ × 1.2(50−τ)
+//    Domestic DWL = 0.36τ²  (each production/consumption triangle: 0.18τ²)
+// ═══════════════════════════════════════════════════════════════════
+
+let largeCountry = false;
+
+const Pw = 30, PA = 60, QA = 40, M_FREE = 60;
+const Qs = P => Math.max(0, P - 20);
+const Qd = P => Math.max(0, 100 - P);
+
+const C   = document.getElementById('c');
+const ctx = C.getContext('2d');
+
+// ── Canvas layout ──────────────────────────────────────────────────
+const ML=70, W1=420, GAP=85, W2=430, MR=95, MT=48, MB=72;
+const H  = C.height - MT - MB;      // shared plot height = 390
+const RX = ML + W1 + GAP;           // = 575 — right graph y-axis
+
+const PMAX=78, QMAX=85, MMAX=70;    // visible data ranges
+
+const cx1 = q => ML + (q / QMAX) * W1;
+const cx2 = m => RX + (m / MMAX) * W2;
+const cy  = p => MT + ((PMAX - p) / PMAX) * H;
+
+// ── Drawing helpers ────────────────────────────────────────────────
+const fillPoly = (pts, color) => {
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  pts.forEach(([x,y], i) => i ? ctx.lineTo(x,y) : ctx.moveTo(x,y));
+  ctx.closePath(); ctx.fill();
+};
+const seg = (x1,y1,x2,y2) => { ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke(); };
+const dot = (x,y,r,color)  => { ctx.fillStyle=color; ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill(); };
+
+// ── Economic calculations ──────────────────────────────────────────
+function computeEcon(tau) {
+  const maxTau = largeCountry ? 50 : 30;
+  const prohib = tau >= maxTau;
+
+  let P_d, P_star;
+  if (!largeCountry) {
+    P_d    = prohib ? PA : Pw + tau;
+    P_star = Pw;                             // small country: world price fixed
+  } else {
+    P_d    = prohib ? PA        : Pw + 0.6 * tau;
+    P_star = prohib ? 10        : Pw - 0.4 * tau;  // falls with tariff
+  }
+
+  const qs1 = Qs(Pw), qd1 = Qd(Pw);        // free-trade quantities
+  const qs2 = Qs(P_d), qd2 = Qd(P_d);      // tariff quantities
+  const Mtau   = Math.max(0, qd2 - qs2);
+  const govRev = prohib ? 0 : (P_d - P_star) * Mtau;   // = τ × Mtau
+  const dwl    = prohib ? 0 : (largeCountry ? 0.36 * tau * tau : tau * tau);
+  const totGain   = (largeCountry && !prohib) ? (Pw - P_star) * Mtau : 0;
+  const foreignDwl= (largeCountry && !prohib) ? 0.24 * tau * tau : 0;
+
+  return { P_d, P_star, qs1, qd1, qs2, qd2, Mtau, govRev, dwl, totGain, foreignDwl, prohib };
+}
+
+// ── Main draw ──────────────────────────────────────────────────────
+function draw(tau) {
+  ctx.clearRect(0, 0, C.width, C.height);
+  const e = computeEcon(tau);
+  drawDomestic(tau, e);
+  drawImportMarket(tau, e);
+  updateStats(tau, e);
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  LEFT GRAPH — Domestic Market
+// ══════════════════════════════════════════════════════════════════
+function drawDomestic(tau, { P_d, P_star, qs1, qd1, qs2, qd2, Mtau, prohib }) {
+
+  // ── Welfare shading ────────────────────────────────────────────
+  if (tau > 0 && !prohib) {
+    // PS gain (red trapezoid): Pw→P_d, left of supply
+    fillPoly([
+      [cx1(0),   cy(Pw)],
+      [cx1(qs1), cy(Pw)],
+      [cx1(qs2), cy(P_d)],
+      [cx1(0),   cy(P_d)]
+    ], 'rgba(220,38,38,0.25)');
+
+    // Left DWL (purple triangle): right angle at (qs2, Pw)
+    fillPoly([
+      [cx1(qs1), cy(Pw)],
+      [cx1(qs2), cy(Pw)],
+      [cx1(qs2), cy(P_d)]
+    ], 'rgba(124,58,237,0.3)');
+
+    // Gov revenue, domestic portion (green): Pw→P_d over import band
+    fillPoly([
+      [cx1(qs2), cy(Pw)],
+      [cx1(qd2), cy(Pw)],
+      [cx1(qd2), cy(P_d)],
+      [cx1(qs2), cy(P_d)]
+    ], 'rgba(22,163,74,0.3)');
+
+    // Terms-of-trade gain (orange): P*→Pw over import band [large country only]
+    if (largeCountry && P_star < Pw) {
+      fillPoly([
+        [cx1(qs2), cy(P_star)],
+        [cx1(qd2), cy(P_star)],
+        [cx1(qd2), cy(Pw)],
+        [cx1(qs2), cy(Pw)]
+      ], 'rgba(234,88,12,0.3)');
+    }
+
+    // Right DWL (purple triangle): right angle at (qd2, Pw)
+    fillPoly([
+      [cx1(qd2), cy(Pw)],
+      [cx1(qd1), cy(Pw)],
+      [cx1(qd2), cy(P_d)]
+    ], 'rgba(124,58,237,0.3)');
+  }
+
+  // ── Axes ───────────────────────────────────────────────────────
+  ctx.strokeStyle='#333'; ctx.lineWidth=1.5; ctx.setLineDash([]);
+  seg(cx1(0), cy(0), cx1(0), cy(PMAX+1));
+  seg(cx1(0), cy(0), cx1(QMAX+1), cy(0));
+  ctx.fillStyle='#333'; ctx.font='italic 15px Georgia, serif';
+  ctx.textAlign='center'; ctx.fillText('Q', cx1(QMAX)+10, cy(0)+5);
+  ctx.textAlign='left';   ctx.fillText('P', cx1(0)-4,     cy(PMAX)-8);
+
+  // ── Supply: P=20+Q ─────────────────────────────────────────────
+  ctx.strokeStyle='#dc2626'; ctx.lineWidth=2.5; ctx.setLineDash([]);
+  ctx.beginPath(); ctx.moveTo(cx1(0),cy(20)); ctx.lineTo(cx1(PMAX-20),cy(PMAX)); ctx.stroke();
+  ctx.fillStyle='#dc2626'; ctx.font='bold italic 15px Georgia, serif';
+  ctx.textAlign='left'; ctx.fillText('S', cx1(PMAX-20)+5, cy(PMAX)+5);
+
+  // ── Demand: P=100−Q ────────────────────────────────────────────
+  ctx.strokeStyle='#2563eb'; ctx.lineWidth=2.5;
+  ctx.beginPath(); ctx.moveTo(cx1(100-PMAX),cy(PMAX)); ctx.lineTo(cx1(QMAX),cy(100-QMAX)); ctx.stroke();
+  ctx.fillStyle='#2563eb'; ctx.font='bold italic 15px Georgia, serif';
+  ctx.textAlign='left'; ctx.fillText('D', cx1(QMAX)+5, cy(100-QMAX)+5);
+
+  // ── Autarky equilibrium ────────────────────────────────────────
+  ctx.strokeStyle='#ccc'; ctx.lineWidth=1; ctx.setLineDash([5,4]);
+  seg(cx1(0),cy(PA),cx1(QA),cy(PA)); seg(cx1(QA),cy(PA),cx1(QA),cy(0));
+  ctx.setLineDash([]);
+  dot(cx1(QA), cy(PA), 4.5, '#555');
+  ctx.fillStyle='#777'; ctx.font='12.5px sans-serif';
+  ctx.textAlign='right'; ctx.fillText('Pᴬ', cx1(0)-7, cy(PA)+4);
+  ctx.textAlign='center'; ctx.fillText('Qᴬ', cx1(QA), cy(0)+30);
+
+  // ── World price line (Pw) ──────────────────────────────────────
+  ctx.strokeStyle='#7c3aed'; ctx.lineWidth=1.8; ctx.setLineDash([]);
+  seg(cx1(0), cy(Pw), cx1(QMAX), cy(Pw));
+  ctx.fillStyle='#7c3aed'; ctx.font='bold 13px sans-serif';
+  ctx.textAlign='right'; ctx.fillText('Pʷ', cx1(0)-7, cy(Pw)+4);
+
+  // Q₁ and Q₄ dashed verticals
+  ctx.strokeStyle='#7c3aed'; ctx.lineWidth=1; ctx.setLineDash([3,3]);
+  seg(cx1(qs1),cy(Pw),cx1(qs1),cy(0));
+  seg(cx1(qd1),cy(Pw),cx1(qd1),cy(0));
+  ctx.setLineDash([]);
+  dot(cx1(qs1),cy(Pw),4,'#7c3aed'); dot(cx1(qd1),cy(Pw),4,'#7c3aed');
+  ctx.fillStyle='#7c3aed'; ctx.font='12.5px sans-serif'; ctx.textAlign='center';
+  ctx.fillText('Q₁', cx1(qs1), cy(0)+15);
+  ctx.fillText('Q₄', cx1(qd1), cy(0)+15);
+
+  // ── Tariff price line (P_d) ────────────────────────────────────
+  if (tau > 0) {
+    const drawP = prohib ? PA : P_d;
+
+    ctx.strokeStyle='#059669'; ctx.lineWidth=2; ctx.setLineDash([]);
+    seg(cx1(0), cy(drawP), cx1(QMAX), cy(drawP));
+    ctx.fillStyle='#059669'; ctx.font='bold 13px sans-serif'; ctx.textAlign='right';
+    ctx.fillText(prohib ? 'Pᴬ' : (largeCountry ? 'P_d' : 'Pʷ+τ'), cx1(0)-7, cy(drawP)+4);
+
+    // ── New world price P* line (large country only) ───────────
+    if (largeCountry && !prohib) {
+      ctx.strokeStyle='#ea580c'; ctx.lineWidth=1.8; ctx.setLineDash([]);
+      seg(cx1(0), cy(P_star), cx1(QMAX), cy(P_star));
+      ctx.fillStyle='#ea580c'; ctx.font='bold 13px sans-serif'; ctx.textAlign='right';
+      ctx.fillText('P*', cx1(0)-7, cy(P_star)+4);
+    }
+
+    // τ bracket: spans P* to P_d (= Pw to P_d for small country)
+    const bracketBot = prohib ? cy(Pw) : cy(P_star);
+    const bracketTop = cy(drawP);
+    const yMid = (bracketBot + bracketTop) / 2;
+    ctx.strokeStyle='#059669'; ctx.lineWidth=1; ctx.setLineDash([]);
+    seg(cx1(0)-20, bracketBot, cx1(0)-20, bracketTop);
+    seg(cx1(0)-20, bracketBot, cx1(0)-16, bracketBot);
+    seg(cx1(0)-20, bracketTop, cx1(0)-16, bracketTop);
+    ctx.fillStyle='#059669'; ctx.font='12px sans-serif';
+    ctx.textAlign='right'; ctx.fillText('τ', cx1(0)-23, yMid+4);
+
+    if (!prohib) {
+      // Q₂, Q₃ dashed verticals
+      ctx.strokeStyle='#059669'; ctx.lineWidth=1; ctx.setLineDash([3,3]);
+      seg(cx1(qs2),cy(P_d),cx1(qs2),cy(0));
+      seg(cx1(qd2),cy(P_d),cx1(qd2),cy(0));
+      ctx.setLineDash([]);
+      dot(cx1(qs2),cy(P_d),4,'#059669'); dot(cx1(qd2),cy(P_d),4,'#059669');
+      ctx.fillStyle='#059669'; ctx.font='12.5px sans-serif'; ctx.textAlign='center';
+      ctx.fillText('Q₂', cx1(qs2), cy(0)+15);
+      ctx.fillText('Q₃', cx1(qd2), cy(0)+15);
+
+      // Import bracket
+      const yB = cy(0)+46;
+      ctx.strokeStyle='#e11d48'; ctx.lineWidth=1.5;
+      seg(cx1(qs2),yB,cx1(qd2),yB);
+      seg(cx1(qs2),yB-4,cx1(qs2),yB+4); seg(cx1(qd2),yB-4,cx1(qd2),yB+4);
+      ctx.fillStyle='#e11d48'; ctx.font='11.5px sans-serif'; ctx.textAlign='center';
+      ctx.fillText('M', cx1((qs2+qd2)/2), yB+13);
+    }
+  } else {
+    // Free-trade import bracket
+    const yB = cy(0)+46;
+    ctx.strokeStyle='#e11d48'; ctx.lineWidth=1.5;
+    seg(cx1(qs1),yB,cx1(qd1),yB);
+    seg(cx1(qs1),yB-4,cx1(qs1),yB+4); seg(cx1(qd1),yB-4,cx1(qd1),yB+4);
+    ctx.fillStyle='#e11d48'; ctx.font='11.5px sans-serif'; ctx.textAlign='center';
+    ctx.fillText('M (free trade)', cx1((qs1+qd1)/2), yB+13);
+  }
+
+  // ── Title ───────────────────────────────────────────────────────
+  ctx.fillStyle='#111'; ctx.font='bold 15px sans-serif'; ctx.textAlign='center';
+  ctx.fillText('Domestic Market', cx1(QMAX/2), MT-18);
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  RIGHT GRAPH — Import Market
+//
+//  Import demand: P = 60 − M/2  (vertical intercept at PA=60)
+//  Small country supply: perfectly elastic at Pw
+//  Large country supply: upward-sloping P* = 10 + M/3
+//    — both pass through (M_FREE=60, Pw=30) in free trade  ✓
+// ══════════════════════════════════════════════════════════════════
+function drawImportMarket(tau, { P_d, P_star, Mtau, prohib }) {
+
+  // ── Welfare shading ────────────────────────────────────────────
+  if (tau > 0 && !prohib) {
+    // Gov revenue, domestic-consumer portion (green): Pw→P_d over 0…Mtau
+    fillPoly([
+      [cx2(0),    cy(Pw)],
+      [cx2(Mtau), cy(Pw)],
+      [cx2(Mtau), cy(P_d)],
+      [cx2(0),    cy(P_d)]
+    ], 'rgba(22,163,74,0.3)');
+
+    // Terms-of-trade gain (orange): P*→Pw over 0…Mtau [large country only]
+    if (largeCountry && P_star < Pw) {
+      fillPoly([
+        [cx2(0),    cy(P_star)],
+        [cx2(Mtau), cy(P_star)],
+        [cx2(Mtau), cy(Pw)],
+        [cx2(0),    cy(Pw)]
+      ], 'rgba(234,88,12,0.3)');
+    }
+
+    // DWL (purple triangle — domestic portion):
+    //   right angle at (Mtau, Pw); hypotenuse = import demand from (Mtau,P_d)→(M_FREE,Pw)
+    //   Area = ½ × (M_FREE−Mtau) × (P_d−Pw) = domestic DWL  ✓
+    fillPoly([
+      [cx2(Mtau),   cy(Pw)],
+      [cx2(M_FREE), cy(Pw)],
+      [cx2(Mtau),   cy(P_d)]
+    ], 'rgba(124,58,237,0.3)');
+
+    // Foreign DWL (indigo triangle — large country only):
+    //   right angle at (Mtau, Pw); hypotenuse = import supply from (Mtau,P*)→(M_FREE,Pw)
+    //   Area = ½ × (M_FREE−Mtau) × (Pw−P*) = 0.24τ²
+    if (largeCountry && P_star < Pw) {
+      fillPoly([
+        [cx2(Mtau),   cy(Pw)],
+        [cx2(M_FREE), cy(Pw)],
+        [cx2(Mtau),   cy(P_star)]
+      ], 'rgba(99,102,241,0.4)');
+    }
+  }
+
+  // ── Axes ───────────────────────────────────────────────────────
+  ctx.strokeStyle='#333'; ctx.lineWidth=1.5; ctx.setLineDash([]);
+  seg(RX, cy(0), RX, cy(PMAX+1));
+  seg(RX, cy(0), cx2(MMAX+1), cy(0));
+  ctx.fillStyle='#333'; ctx.font='italic 15px Georgia, serif';
+  ctx.textAlign='center'; ctx.fillText('M', cx2(MMAX)+10, cy(0)+5);
+  ctx.textAlign='left';   ctx.fillText('P', RX-4, cy(PMAX)-8);
+
+  // ── Import supply ──────────────────────────────────────────────
+  ctx.strokeStyle='#dc2626'; ctx.lineWidth=2.5; ctx.setLineDash([]);
+  if (!largeCountry) {
+    // Small country: perfectly elastic at Pw
+    seg(RX, cy(Pw), cx2(MMAX), cy(Pw));
+    ctx.fillStyle='#dc2626'; ctx.font='bold italic 14px Georgia, serif';
+    ctx.textAlign='left'; ctx.fillText('S*', cx2(MMAX)+5, cy(Pw)+5);
+  } else {
+    // Large country: P* = 10 + M/3
+    ctx.beginPath();
+    ctx.moveTo(cx2(0),    cy(10));
+    ctx.lineTo(cx2(MMAX), cy(10 + MMAX/3));
+    ctx.stroke();
+    ctx.fillStyle='#dc2626'; ctx.font='bold italic 14px Georgia, serif';
+    ctx.textAlign='left'; ctx.fillText('S*', cx2(MMAX)+5, cy(10+MMAX/3)+5);
+
+    // Dashed Pw reference line (original equilibrium price)
+    ctx.strokeStyle='#7c3aed'; ctx.lineWidth=1; ctx.setLineDash([5,4]);
+    seg(RX, cy(Pw), cx2(MMAX), cy(Pw));
+    ctx.setLineDash([]);
+  }
+
+  // ── Import demand: P = 60 − M/2 ───────────────────────────────
+  ctx.strokeStyle='#2563eb'; ctx.lineWidth=2.5; ctx.setLineDash([]);
+  ctx.beginPath();
+  ctx.moveTo(cx2(0),    cy(PA));              // M=0, P=PA=60
+  ctx.lineTo(cx2(MMAX), cy(60 - MMAX/2));    // M=MMAX, P=25
+  ctx.stroke();
+  ctx.fillStyle='#2563eb'; ctx.font='bold italic 14px Georgia, serif';
+  ctx.textAlign='left'; ctx.fillText('D', cx2(MMAX)+5, cy(60-MMAX/2)+5);
+
+  // ── Pᴬ reference at top of import demand ──────────────────────
+  dot(RX, cy(PA), 4.5, '#555');
+  ctx.strokeStyle='#ccc'; ctx.lineWidth=1; ctx.setLineDash([5,4]);
+  seg(RX, cy(PA), cx2(MMAX), cy(PA));
+  ctx.setLineDash([]);
+  ctx.fillStyle='#777'; ctx.font='12.5px sans-serif';
+  ctx.textAlign='right'; ctx.fillText('Pᴬ', RX-7, cy(PA)+4);
+
+  // ── World price label ──────────────────────────────────────────
+  ctx.fillStyle='#7c3aed'; ctx.font='bold 13px sans-serif';
+  ctx.textAlign='right'; ctx.fillText('Pʷ', RX-7, cy(Pw)+4);
+
+  // Free-trade equilibrium dot at (M_FREE, Pw) — on BOTH curves ✓
+  dot(cx2(M_FREE), cy(Pw), 4, '#7c3aed');
+  ctx.strokeStyle='#7c3aed'; ctx.lineWidth=1; ctx.setLineDash([3,3]);
+  seg(cx2(M_FREE), cy(Pw), cx2(M_FREE), cy(0));
+  ctx.setLineDash([]);
+  ctx.fillStyle='#7c3aed'; ctx.font='12.5px sans-serif';
+  ctx.textAlign='center'; ctx.fillText('M₀', cx2(M_FREE), cy(0)+15);
+
+  // ── Tariff price line (P_d) ────────────────────────────────────
+  if (tau > 0) {
+    const drawP = prohib ? PA : P_d;
+
+    ctx.strokeStyle='#059669'; ctx.lineWidth=2; ctx.setLineDash([]);
+    seg(RX, cy(drawP), cx2(MMAX), cy(drawP));
+    ctx.fillStyle='#059669'; ctx.font='bold 13px sans-serif'; ctx.textAlign='right';
+    ctx.fillText(prohib ? 'Pᴬ' : (largeCountry ? 'P_d' : 'Pʷ+τ'), RX-7, cy(drawP)+4);
+
+    // ── New world price P* (large country only) ────────────────
+    if (largeCountry && !prohib) {
+      // Dashed orange line at P* across right graph
+      ctx.strokeStyle='#ea580c'; ctx.lineWidth=1.5; ctx.setLineDash([4,3]);
+      seg(RX, cy(P_star), cx2(MMAX), cy(P_star));
+      ctx.setLineDash([]);
+
+      // Label P*
+      ctx.fillStyle='#ea580c'; ctx.font='bold 13px sans-serif'; ctx.textAlign='right';
+      ctx.fillText('P*', RX-7, cy(P_star)+4);
+
+      // Dot on supply curve at (Mtau, P*) and on demand at (Mtau, P_d)
+      dot(cx2(Mtau), cy(P_star), 4.5, '#ea580c');  // supply side (foreign price)
+    }
+
+    if (!prohib) {
+      // Dot on demand at (Mtau, P_d); dashed vertical
+      dot(cx2(Mtau), cy(P_d), 4, '#059669');
+      ctx.strokeStyle='#059669'; ctx.lineWidth=1; ctx.setLineDash([3,3]);
+      seg(cx2(Mtau), cy(P_d), cx2(Mtau), cy(0));
+      ctx.setLineDash([]);
+      ctx.fillStyle='#059669'; ctx.font='12.5px sans-serif';
+      ctx.textAlign='center'; ctx.fillText('Mτ', cx2(Mtau), cy(0)+15);
+
+      // τ bracket on right y-axis (spans P* → P_d)
+      const bracketBot = cy(P_star);
+      const bracketTop = cy(P_d);
+      const yMid = (bracketBot + bracketTop) / 2;
+      ctx.strokeStyle='#059669'; ctx.lineWidth=1;
+      seg(RX-20, bracketBot, RX-20, bracketTop);
+      seg(RX-20, bracketBot, RX-16, bracketBot);
+      seg(RX-20, bracketTop, RX-16, bracketTop);
+      ctx.fillStyle='#059669'; ctx.font='12px sans-serif';
+      ctx.textAlign='right'; ctx.fillText('τ', RX-23, yMid+4);
+    }
+  }
+
+  // ── Title ───────────────────────────────────────────────────────
+  ctx.fillStyle='#111'; ctx.font='bold 15px sans-serif'; ctx.textAlign='center';
+  ctx.fillText('Import Market', RX + W2/2, MT-18);
+}
+
+// ── Stats update ───────────────────────────────────────────────────
+function updateStats(tau, { Mtau, govRev, dwl, totGain, foreignDwl, prohib }) {
+  document.getElementById('v-imports').textContent = Mtau.toFixed(0);
+  document.getElementById('v-gov').textContent     = govRev.toFixed(1);
+  document.getElementById('v-tot').textContent     = totGain.toFixed(1);
+  document.getElementById('v-dwl').textContent     = dwl.toFixed(2);
+  document.getElementById('v-fdwl').textContent    = foreignDwl.toFixed(2);
+  document.getElementById('prohib').style.display  = prohib ? 'inline' : 'none';
+  document.getElementById('legend').style.display  = tau > 0 ? 'flex' : 'none';
+  const showTot  = largeCountry && tau > 0;
+  const showFdwl = largeCountry && tau > 0 && !prohib;
+  document.getElementById('s-tot').style.display    = showTot  ? '' : 'none';
+  document.getElementById('leg-tot').style.display  = showTot  ? '' : 'none';
+  document.getElementById('s-fdwl').style.display   = showFdwl ? '' : 'none';
+  document.getElementById('leg-fdwl').style.display = showFdwl ? '' : 'none';
+}
+
+// ── Country toggle ─────────────────────────────────────────────────
+function setCountry(large) {
+  largeCountry = large;
+  document.getElementById('btn-small').classList.toggle('active', !large);
+  document.getElementById('btn-large').classList.toggle('active',  large);
+
+  const slider = document.getElementById('tau');
+  const maxTau = large ? 50 : 30;
+  slider.max   = maxTau;
+  if (parseFloat(slider.value) > maxTau) slider.value = maxTau;
+
+  draw(parseFloat(slider.value));
+}
+
+// ── Slider ─────────────────────────────────────────────────────────
+document.getElementById('tau').addEventListener('input', e => {
+  const tau = parseFloat(e.target.value);
+  document.getElementById('tau-val').textContent = tau;
+  draw(tau);
+});
+
+draw(0);
+</script>
+</body>
+</html>
